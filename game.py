@@ -3,19 +3,131 @@ import random
 import sys
 import json
 import math
+import os 
 from abc import ABC, abstractmethod
+
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DIR_SOUND = os.path.join(BASE_DIR, "sound")
+DIR_BG = os.path.join(BASE_DIR, "background")
 
 WIDTH, HEIGHT = 900, 700
 FPS = 60 
 
-C_BG = (5, 5, 15)          
-C_GRID = (20, 40, 60)      
+C_BG = (5, 5, 15)           
+C_GRID = (20, 40, 60)       
 C_TEXT_MAIN = (240, 240, 255)
 C_NEON_CYAN = (0, 255, 255)
 C_NEON_MAGENTA = (255, 0, 150)
 C_NEON_GREEN = (50, 255, 50) 
 C_NEON_YELLOW = (255, 255, 0) 
-C_ERROR = (255, 50, 50)    
+C_ERROR = (255, 50, 50)
+C_GRAY = (100, 100, 100)
+
+
+class SoundManager:
+    def __init__(self):
+        self.sounds = {}
+        self.music_playing = False
+        self.sfx_volume = 0.3   
+        self.music_volume = 0.2 
+        
+        try:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
+            print("[SYSTEM] Audio Mixer Initialized")
+        except pygame.error:
+            print("[WARNING] No Audio Device Found")
+
+        self.load_sound("type", os.path.join(DIR_SOUND, "type.wav"))
+        self.load_sound("explode", os.path.join(DIR_SOUND, "explode.wav"))
+        self.load_sound("error", os.path.join(DIR_SOUND, "error.wav"))
+        self.load_sound("damage", os.path.join(DIR_SOUND, "damage.wav"))
+        self.load_sound("levelup", os.path.join(DIR_SOUND, "levelup.wav"))
+        self.load_sound("gameover", os.path.join(DIR_SOUND, "gameover.wav"))
+        
+        self.load_music(os.path.join(DIR_SOUND, "bgm.mp3"))
+
+    def load_sound(self, name, filepath):
+        if os.path.exists(filepath):
+            try:
+                self.sounds[name] = pygame.mixer.Sound(filepath)
+                self.sounds[name].set_volume(self.sfx_volume)
+            except:
+                print(f"[WARNING] Failed to load sound: {filepath}")
+
+    def load_music(self, filepath):
+        if os.path.exists(filepath):
+            try:
+                pygame.mixer.music.load(filepath)
+                pygame.mixer.music.set_volume(self.music_volume)
+                self.music_playing = True
+            except:
+                print(f"[WARNING] Failed to load music: {filepath}")
+
+    def play(self, name):
+        if name in self.sounds:
+            self.sounds[name].set_volume(self.sfx_volume) 
+            self.sounds[name].play()
+
+    def play_music(self):
+        if self.music_playing:
+            try:
+                pygame.mixer.music.play(-1, 0.0, 5000) 
+                pygame.mixer.music.set_volume(self.music_volume)
+            except: pass
+
+    def stop_music(self):
+        try:
+            pygame.mixer.music.fadeout(1000)
+        except: pass
+
+    def set_sfx_volume(self, volume):
+        self.sfx_volume = volume
+        for sound in self.sounds.values():
+            sound.set_volume(volume)
+
+    def set_music_volume(self, volume):
+        self.music_volume = volume
+        if self.music_playing:
+            try:
+                pygame.mixer.music.set_volume(volume)
+            except: pass
+
+class Slider:
+    def __init__(self, x, y, w, h, initial_val, label):
+        self.rect = pygame.Rect(x, y, w, h)
+        self.val = initial_val 
+        self.label = label
+        self.dragging = False
+        self.font = pygame.font.Font(None, 36)
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if self.rect.collidepoint(event.pos):
+                self.dragging = True
+                self.update_val(event.pos[0])
+        elif event.type == pygame.MOUSEBUTTONUP:
+            self.dragging = False
+        elif event.type == pygame.MOUSEMOTION:
+            if self.dragging:
+                self.update_val(event.pos[0])
+
+    def update_val(self, mouse_x):
+        relative_x = mouse_x - self.rect.x
+        self.val = max(0.0, min(1.0, relative_x / self.rect.width))
+
+    def draw(self, surface):
+        label_surf = self.font.render(f"{self.label}: {int(self.val * 100)}%", True, C_TEXT_MAIN)
+        surface.blit(label_surf, (self.rect.x, self.rect.y - 30))
+        pygame.draw.rect(surface, C_GRID, self.rect, border_radius=5)
+        fill_width = int(self.rect.width * self.val)
+        fill_rect = pygame.Rect(self.rect.x, self.rect.y, fill_width, self.rect.height)
+        pygame.draw.rect(surface, C_NEON_CYAN, fill_rect, border_radius=5)
+        handle_x = self.rect.x + fill_width
+        pygame.draw.circle(surface, C_TEXT_MAIN, (handle_x, self.rect.centery), 10)
 
 class LevelManager:
     def __init__(self):
@@ -59,6 +171,8 @@ class ScreenShake:
 
 class DataManager:
     def __init__(self):
+        self.filepath = os.path.join(BASE_DIR, "game_data.json")
+        
         self.__score = 0
         self.__highscore = self._load_data()
         self.__health = 100
@@ -67,16 +181,27 @@ class DataManager:
 
     def _load_data(self):
         try:
-            with open("game_data.json", "r") as f:
-                return json.load(f).get("highscore", 0)
-        except:
+            if os.path.exists(self.filepath):
+                with open(self.filepath, "r") as f:
+                    data = json.load(f)
+                    print(f"[SYSTEM] Loaded Highscore: {data.get('highscore', 0)}")
+                    return data.get("highscore", 0)
+            else:
+                return 0
+        except Exception as e:
+            print(f"[WARNING] Gagal load data: {e}")
             return 0
 
     def save_data(self):
         if self.__score > self.__highscore:
             self.__highscore = self.__score
-            with open("game_data.json", "w") as f:
+            
+        try:
+            with open(self.filepath, "w") as f:
                 json.dump({"highscore": self.__highscore}, f)
+            print(f"[SYSTEM] Data saved successfully to: {self.filepath}")
+        except Exception as e:
+            print(f"[ERROR] Failed to save data: {e}")
 
     @property
     def score(self): return self.__score
@@ -89,6 +214,7 @@ class DataManager:
     
     @property
     def streak(self): return self.__streak 
+
     def reset_stats(self):
         self.__score = 0
         self.__health = self.__max_health
@@ -117,7 +243,6 @@ class DataManager:
 
     def reset_streak(self):
         self.__streak = 0
-
 class Entity(ABC, pygame.sprite.Sprite):
     def __init__(self, x, y):
         super().__init__()
@@ -233,10 +358,36 @@ class Button:
 class CyberTyperGame:
     def __init__(self):
         pygame.init()
+        pygame.mixer.pre_init(44100, -16, 2, 2048)
+        
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption("CYBER TYPER: NEON PROTOCOL v2.3 - STREAK EDITION")
+        pygame.display.set_caption("CYBER TYPER: NEON PROTOCOL v3.0 [FIXED]")
         self.clock = pygame.time.Clock()
         
+        self.sound = SoundManager()
+        self.sound.play_music() 
+
+        try:
+            bg_width = WIDTH + 20
+            bg_height = HEIGHT + 20
+            bg_path = os.path.join(DIR_BG, "background.jpg")
+            
+            if os.path.exists(bg_path):
+                self.bg_image = pygame.image.load(bg_path).convert()
+                self.bg_image = pygame.transform.scale(self.bg_image, (bg_width, bg_height))
+                
+                dark_overlay = pygame.Surface((bg_width, bg_height))
+                dark_overlay.fill((0, 0, 0))
+                dark_overlay.set_alpha(150)
+                self.bg_image.blit(dark_overlay, (0,0))
+                print(f"[SYSTEM] Background loaded from {bg_path}")
+            else:
+                raise FileNotFoundError
+                
+        except FileNotFoundError:
+            print("[SYSTEM] Background not found. Using solid color.")
+            self.bg_image = None
+
         self.data = DataManager()
         self.shake = ScreenShake()
         self.level_manager = LevelManager()
@@ -245,15 +396,21 @@ class CyberTyperGame:
         self.words = ["system", "hacker", "protocol", "circuit", "binary", 
                       "cyber", "neon", "matrix", "linux", "python", "script",
                       "server", "proxy", "firewall", "encryption", "node", "data",
-                      "java", "object", "class", "void", "public", "static"]
+                      "java", "object", "class", "void", "public", "static",
+                      "terminal", "root", "sudo", "apt", "kernel", "bios"]
         
         self.levelup_popup_timer = 0
         self.setup_menu()
+        
+        self.slider_bgm = Slider(WIDTH//2 - 150, 250, 300, 20, self.sound.music_volume, "BGM Volume")
+        self.slider_sfx = Slider(WIDTH//2 - 150, 350, 300, 20, self.sound.sfx_volume, "SFX Volume")
+        self.btn_back = Button("BACK", 500, self.back_to_menu)
 
     def setup_menu(self):
         self.buttons = [
-            Button("START", 350, self.start_game),
-            Button("QUIT", 450, self.quit_game)
+            Button("START", 300, self.start_game),
+            Button("OPTIONS", 380, self.open_options), 
+            Button("QUIT", 460, self.quit_game)
         ]
 
     def start_game(self):
@@ -265,6 +422,13 @@ class CyberTyperGame:
         self.input_buffer = ""
         self.spawn_timer = 0
         self.state = "PLAY"
+        self.sound.play("levelup") 
+
+    def open_options(self):
+        self.state = "OPTIONS"
+
+    def back_to_menu(self):
+        self.state = "MENU"
 
     def quit_game(self):
         pygame.quit()
@@ -277,10 +441,18 @@ class CyberTyperGame:
     def run(self):
         running = True
         while running:
-            self.screen.fill(C_BG)
+            self.shake.update()
+            offset = self.shake.get_offset()
+
+            if self.bg_image:
+                bg_x = -10 + (offset[0] * 0.5)
+                bg_y = -10 + (offset[1] * 0.5)
+                self.screen.blit(self.bg_image, (bg_x, bg_y))
+            else:
+                self.screen.fill(C_BG)
+            
             mouse_pos = pygame.mouse.get_pos()
             
-            # --- EVENTS ---
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -289,6 +461,18 @@ class CyberTyperGame:
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         for btn in self.buttons:
                             btn.handle_click()
+
+                elif self.state == "OPTIONS":
+                    self.slider_bgm.handle_event(event)
+                    self.slider_sfx.handle_event(event)
+                    
+                    self.sound.set_music_volume(self.slider_bgm.val)
+                    self.sound.set_sfx_volume(self.slider_sfx.val)
+                    
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        self.btn_back.handle_click()
+                        if self.slider_sfx.rect.collidepoint(event.pos):
+                            self.sound.play("type")
 
                 elif self.state == "PLAY":
                     if event.type == pygame.KEYDOWN:
@@ -300,82 +484,110 @@ class CyberTyperGame:
                                 self.data.reset_streak() 
                                 self.shake.trigger(3) 
                                 self.floaters.append(FloatingText(WIDTH//2, HEIGHT-60, "-5 (Panic)", C_ERROR))
-                        
+                                self.sound.play("error") 
+
                         elif event.key == pygame.K_BACKSPACE:
                             self.input_buffer = self.input_buffer[:-1]
+                            self.sound.play("type") 
                         
                         elif event.key == pygame.K_ESCAPE:
                             self.state = "GAMEOVER"
                             self.data.save_data()
+                            self.sound.stop_music()
+                            self.sound.play("gameover")
                         else:
                             if event.unicode.isalpha():
                                 self.input_buffer += event.unicode
+                                self.sound.play("type") 
 
                 elif self.state == "GAMEOVER":
                     if event.type == pygame.KEYDOWN:
                         if event.key == pygame.K_RETURN:
                             self.state = "MENU"
-
-            self.shake.update()
-            offset = self.shake.get_offset()
+                            self.sound.play_music() 
 
             if self.state == "MENU":
                 title_font = pygame.font.Font(None, 80)
                 title = title_font.render("CYBER TYPER", True, C_NEON_MAGENTA)
-                self.screen.blit(title, (WIDTH//2 - title.get_width()//2, 150))
+                title_shadow = title_font.render("CYBER TYPER", True, (0,0,0))
+                self.screen.blit(title_shadow, (WIDTH//2 - title.get_width()//2 + 3, 103))
+                self.screen.blit(title, (WIDTH//2 - title.get_width()//2, 100))
                 
                 score_font = pygame.font.Font(None, 40)
                 hs_text = score_font.render(f"High Score: {self.data.highscore}", True, C_NEON_CYAN)
-                self.screen.blit(hs_text, (WIDTH//2 - hs_text.get_width()//2, 230))
+                self.screen.blit(hs_text, (WIDTH//2 - hs_text.get_width()//2, 180))
 
                 for btn in self.buttons:
                     btn.check_hover(mouse_pos)
                     btn.draw(self.screen)
 
+            elif self.state == "OPTIONS":
+                opt_title = pygame.font.Font(None, 60).render("AUDIO SETTINGS", True, C_NEON_MAGENTA)
+                self.screen.blit(opt_title, (WIDTH//2 - opt_title.get_width()//2, 100))
+
+                self.slider_bgm.draw(self.screen)
+                self.slider_sfx.draw(self.screen)
+
+                self.btn_back.check_hover(mouse_pos)
+                self.btn_back.draw(self.screen)
+
             elif self.state == "PLAY":
                 if self.level_manager.check_level_up(self.data.score):
                     self.levelup_popup_timer = 60
                     self.shake.trigger(10)
+                    self.sound.play("levelup") 
 
                 self.spawn_timer += 1
                 if self.spawn_timer > self.level_manager.get_spawn_delay():
                     self.meteors.append(Meteor(random.choice(self.words), self.level_manager.get_speed_multiplier()))
                     self.spawn_timer = 0
 
-                hit_index = -1
-                for i, meteor in enumerate(self.meteors):
+                meteors_to_remove = []
+                hit_found = False 
+
+                for meteor in self.meteors:
                     meteor.check_match(self.input_buffer)
                     meteor.update()
                     
-                    if self.input_buffer == meteor.text:
-                        hit_index = i
-                        self.data.add_score(10)
+                    if self.input_buffer == meteor.text and not hit_found:
+                        hit_found = True
+                        meteors_to_remove.append(meteor) 
                         
+                        self.data.add_score(10)
                         is_bonus = self.data.increment_streak()
                         if is_bonus:
                             self.data.heal(10) 
                             self.floaters.append(FloatingText(WIDTH//2, HEIGHT//2, "STREAK 5X! +10 HP", C_NEON_GREEN))
                             self.shake.trigger(8)
+                            self.sound.play("levelup")
 
                         self.spawn_particles(meteor.x, meteor.y, C_NEON_CYAN)
                         self.floaters.append(FloatingText(meteor.x, meteor.y, "+10", C_NEON_CYAN)) 
-                        self.input_buffer = ""
                         self.shake.trigger(5)
+                        self.sound.play("explode")
                     
                     elif meteor.y > HEIGHT:
+                        if meteor not in meteors_to_remove: 
+                            meteors_to_remove.append(meteor) 
+                        
                         self.data.take_damage(20) 
                         self.floaters.append(FloatingText(meteor.x, HEIGHT-50, "-20 HP", C_ERROR)) 
                         self.floaters.append(FloatingText(meteor.x, HEIGHT-80, "Streak Lost!", C_ERROR))
                         self.shake.trigger(20)
-                        self.meteors.pop(i)
+                        
                         flash_s = pygame.Surface((WIDTH, HEIGHT))
                         flash_s.fill(C_ERROR)
                         flash_s.set_alpha(50)
                         self.screen.blit(flash_s, (0,0))
-                        break
-
-                if hit_index != -1:
-                    self.meteors.pop(hit_index)
+                        self.sound.play("damage")
+                
+                if hit_found:
+                    self.input_buffer = ""
+                
+                for m in meteors_to_remove:
+                    if m in self.meteors:
+                        self.meteors.remove(m)
+                
 
                 for p in self.particles[:]:
                     p.update()
@@ -424,6 +636,8 @@ class CyberTyperGame:
                 if not self.data.is_alive():
                     self.data.save_data()
                     self.state = "GAMEOVER"
+                    self.sound.stop_music()
+                    self.sound.play("gameover")
 
             elif self.state == "GAMEOVER":
                 overlay = pygame.Surface((WIDTH, HEIGHT))
